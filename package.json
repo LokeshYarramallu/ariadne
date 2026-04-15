@@ -1,6 +1,6 @@
 {
   "name": "ariadne-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server that gives coding agents a structural map of a codebase",
   "main": "dist/index.js",
   "bin": {
