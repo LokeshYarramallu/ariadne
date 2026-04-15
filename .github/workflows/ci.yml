@@ -7,13 +7,53 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  build-and-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+
       - run: npm ci
-      - run: npm run build
+
+      # 1. TypeScript build
+      - name: Build
+        run: npm run build
+
+      # 2. Lint
+      - name: Lint
+        run: npm run lint
+
+      # 3. No stdout writes (would break MCP protocol)
+      - name: Check no process.stdout.write in src
+        run: |
+          if grep -r "process\.stdout" src/ --include="*.ts" | grep -v "scip.ts"; then
+            echo "ERROR: process.stdout usage found — stdout is reserved for MCP protocol"
+            exit 1
+          fi
+
+      # 4. Package size check
+      - name: Package size check
+        run: |
+          OUTPUT=$(npm pack --dry-run 2>&1)
+          echo "$OUTPUT"
+          SIZE=$(echo "$OUTPUT" | grep "unpacked size" | grep -oE '[0-9]+(\.[0-9]+)? [kMG]B')
+          echo "Unpacked size: $SIZE"
+          # Fail if unpacked size exceeds 5 MB
+          SIZE_KB=$(echo "$OUTPUT" | grep "unpacked size" | grep -oE '[0-9]+(\.[0-9]+)? kB' | grep -oE '[0-9]+(\.[0-9]+)?')
+          if [ -n "$SIZE_KB" ] && (( $(echo "$SIZE_KB > 5000" | bc -l) )); then
+            echo "ERROR: Package too large (${SIZE_KB} kB > 5000 kB)"
+            exit 1
+          fi
+
+      # 5. Smoke test (requires SCIP index — index the repo itself)
+      - name: Generate SCIP index for smoke test
+        run: |
+          mkdir -p .ariadne
+          npx --yes @sourcegraph/scip-typescript index --output .ariadne/index-ts.scip
+
+      - name: Smoke test
+        run: npm run smoke

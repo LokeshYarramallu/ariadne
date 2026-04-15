@@ -36,12 +36,14 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "clean": "rm -rf dist",
+    "lint": "eslint src/",
+    "smoke": "npx tsx scripts/smoke-test.ts",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.10.1",
-    "better-sqlite3": "^11.9.1",
     "@types/google-protobuf": "^3.15.12",
+    "better-sqlite3": "^11.9.1",
     "chokidar": "^3.6.0",
     "google-protobuf": "^3.21.4",
     "tree-sitter": "^0.21.1",
@@ -50,10 +52,15 @@
     "tree-sitter-typescript": "^0.21.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/parser": "^8.58.2",
+    "eslint": "^10.2.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.58.2"
   },
   "engines": {
     "node": ">=20.0.0"
