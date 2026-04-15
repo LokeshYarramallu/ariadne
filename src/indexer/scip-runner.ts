@@ -118,71 +118,105 @@ export async function runPythonIndexer(repoPath: string): Promise<string> {
 // TypeScript / JavaScript indexer (@sourcegraph/scip-typescript)
 // ---------------------------------------------------------------------------
 
-/**
- * Walk up from repoPath looking for a tsconfig.json, or find the first one
- * in common subdirectories. Returns the path to the tsconfig or undefined.
- */
-async function findTsConfig(repoPath: string): Promise<string | undefined> {
-  // 1. Root-level tsconfig.json (most common)
-  const root = path.join(repoPath, "tsconfig.json");
-  if (await fs.access(root).then(() => true).catch(() => false)) return root;
+type MonorepoStrategy =
+  | { kind: "pnpm-workspaces" }
+  | { kind: "yarn-workspaces" }
+  | { kind: "tsconfig-root"; tsconfig: string }
+  | { kind: "fallback" };
 
-  // 2. Search one level deep (monorepos: packages/*, apps/*, applications/*)
+async function fileExists(p: string): Promise<boolean> {
+  return fs.access(p).then(() => true).catch(() => false);
+}
+
+/**
+ * Detect the best indexing strategy for the repo.
+ *
+ * Tier 1: pnpm-workspace.yaml  → --pnpm-workspaces (native, single run)
+ * Tier 2: package.json#workspaces or lerna.json → --yarn-workspaces
+ * Tier 3: root tsconfig.json (may have project references) → pass as positional arg
+ * Tier 4: filesystem walk — find first tsconfig.json in common monorepo dirs
+ * Tier 5: fallback (no tsconfig found, let scip-typescript try from root)
+ */
+async function detectStrategy(repoPath: string): Promise<MonorepoStrategy> {
+  // Tier 1: pnpm workspaces
+  if (await fileExists(path.join(repoPath, "pnpm-workspace.yaml"))) {
+    return { kind: "pnpm-workspaces" };
+  }
+
+  // Tier 2: yarn/npm workspaces or lerna
+  if (await fileExists(path.join(repoPath, "lerna.json"))) {
+    return { kind: "yarn-workspaces" };
+  }
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(repoPath, "package.json"), "utf8"));
+    if (pkg.workspaces) return { kind: "yarn-workspaces" };
+  } catch { /* no package.json */ }
+
+  // Tier 3: root tsconfig.json (handles project references automatically)
+  const rootTsconfig = path.join(repoPath, "tsconfig.json");
+  if (await fileExists(rootTsconfig)) {
+    return { kind: "tsconfig-root", tsconfig: rootTsconfig };
+  }
+
+  // Tier 4: search one level deep in common monorepo dirs
   const searchDirs = ["packages", "apps", "applications", "src"];
   for (const dir of searchDirs) {
-    const base = path.join(repoPath, dir);
     let entries: string[];
-    try {
-      entries = await fs.readdir(base);
-    } catch {
-      continue;
-    }
+    try { entries = await fs.readdir(path.join(repoPath, dir)); } catch { continue; }
     for (const entry of entries) {
-      const candidate = path.join(base, entry, "tsconfig.json");
-      if (await fs.access(candidate).then(() => true).catch(() => false)) {
-        return candidate;
+      const candidate = path.join(repoPath, dir, entry, "tsconfig.json");
+      if (await fileExists(candidate)) {
+        return { kind: "tsconfig-root", tsconfig: candidate };
       }
     }
   }
 
-  return undefined;
+  return { kind: "fallback" };
 }
 
 /**
  * Run the TypeScript/JavaScript SCIP indexer against repoPath.
- * Uses npx so no global install is required — npx caches on first run.
+ * Auto-detects monorepo type and uses the appropriate scip-typescript flags.
  * Returns the path to the generated .scip file.
  */
 export async function runTypescriptIndexer(repoPath: string): Promise<string> {
   const outputPath = path.join(repoPath, ".ariadne", "index-ts.scip");
 
-  // If a fresh SCIP file already exists (< 24 h old), skip re-indexing.
-  // This avoids a 5–10 min scip-typescript run when only the DB load needs to
-  // be re-done (e.g. after a crash during the loading phase).
+  // Reuse fresh index (< 24 h old)
   try {
-    const stat = await fs.stat(outputPath);
-    const ageMs = Date.now() - stat.mtimeMs;
+    const ageMs = Date.now() - (await fs.stat(outputPath)).mtimeMs;
     if (ageMs < 24 * 60 * 60 * 1000) {
       process.stderr.write("→ Reusing existing TypeScript SCIP index (< 24 h old).\n");
       return outputPath;
     }
-  } catch {
-    // File doesn't exist yet — proceed to index
+  } catch { /* no existing index */ }
+
+  const strategy = await detectStrategy(repoPath);
+  const baseArgs = ["--yes", "@sourcegraph/scip-typescript", "index",
+                    "--cwd", repoPath, "--output", outputPath];
+
+  let args: string[];
+  switch (strategy.kind) {
+    case "pnpm-workspaces":
+      process.stderr.write("→ Indexing TypeScript/JavaScript files (pnpm workspaces)...\n");
+      args = [...baseArgs, "--pnpm-workspaces"];
+      break;
+    case "yarn-workspaces":
+      process.stderr.write("→ Indexing TypeScript/JavaScript files (yarn/npm workspaces)...\n");
+      args = [...baseArgs, "--yarn-workspaces"];
+      break;
+    case "tsconfig-root": {
+      const rel = path.relative(repoPath, strategy.tsconfig);
+      process.stderr.write(`→ Indexing TypeScript/JavaScript files (tsconfig: ${rel})...\n`);
+      args = [...baseArgs, strategy.tsconfig];
+      break;
+    }
+    default:
+      process.stderr.write("→ Indexing TypeScript/JavaScript files...\n");
+      args = baseArgs;
   }
 
-  process.stderr.write("→ Indexing TypeScript/JavaScript files...\n");
-
-  const tsconfig = await findTsConfig(repoPath);
-  const args = ["--yes", "@sourcegraph/scip-typescript", "index", "--output", outputPath];
-  if (tsconfig) {
-    const rel = path.relative(repoPath, tsconfig);
-    process.stderr.write(`→ Using tsconfig: ${rel}\n`);
-    args.push("--project", tsconfig);
-  }
-
-  // npx --yes auto-installs the package if not cached
   await runSubprocess("npx", args, repoPath);
-
   await fs.access(outputPath);
   return outputPath;
 }
