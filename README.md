@@ -29,7 +29,7 @@ This burns tokens fast and produces shallow answers. Ariadne gives agents the sa
 
 ## Setup
 
-Add this to your MCP config (Claude Desktop, Cursor, or any MCP-compatible editor) — once, and never touch it again:
+Add this to your **project-level** MCP config (not global) — Ariadne uses `process.cwd()` as the repo root, so it must be spawned from the project directory:
 
 ```json
 {
@@ -42,7 +42,7 @@ Add this to your MCP config (Claude Desktop, Cursor, or any MCP-compatible edito
 }
 ```
 
-That's it. Ariadne is spawned as a subprocess and inherits the editor's working directory (your project root). No flags, no paths, no configuration.
+> ⚠️ **Do not add Ariadne to your global MCP config.** It needs to run inside a project directory to index correctly. Use your editor's per-project config (e.g. `.cursor/mcp.json`, `.kiro/settings/mcp.json`, or the project-level Claude Desktop config).
 
 ## What happens on first run
 
