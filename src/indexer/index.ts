@@ -21,13 +21,16 @@ function log(msg: string): void {
   process.stderr.write(msg + "\n");
 }
 
-/** Check whether the DB already has symbols AND is not stale vs the SCIP file. */
-async function needsReload(repoPath: string, scipPath: string): Promise<boolean> {
+/**
+ * Check whether a given SCIP file is newer than the DB or the DB is empty.
+ * Does NOT wipe — just reports whether a reload is needed.
+ */
+async function scipIsStale(repoPath: string, scipPath: string): Promise<boolean> {
   let scipMtime: number;
   try {
     scipMtime = (await fs.stat(scipPath)).mtimeMs;
   } catch {
-    return true; // no SCIP yet
+    return true; // no SCIP file yet → need to run indexer
   }
 
   const dbPath = path.join(repoPath, ".ariadne", "graph.db");
@@ -35,7 +38,7 @@ async function needsReload(repoPath: string, scipPath: string): Promise<boolean>
   try {
     dbMtime = (await fs.stat(dbPath)).mtimeMs;
   } catch {
-    return true; // no DB file
+    return true; // no DB yet
   }
 
   if (scipMtime > dbMtime) return true;
@@ -54,7 +57,7 @@ async function needsReload(repoPath: string, scipPath: string): Promise<boolean>
 export async function runIndexer(): Promise<void> {
   const repoPath = process.cwd();
 
-  // ── 1. Language detection ────────────────────────────────────────────────
+  // ── 1. Language detection ─────────────────────────────────────────────────
   setStatus({ state: "detecting", phase: "Detecting languages…" });
   log("→ Detecting languages...");
   const langs = await detectLanguages(repoPath);
@@ -75,27 +78,18 @@ export async function runIndexer(): Promise<void> {
 
   log(`→ Found: ${detected.join(", ")}`);
 
-  // ── 2. Run SCIP indexers (conditionally) ─────────────────────────────────
-  let totalSymbols = 0;
-  let totalEdges   = 0;
+  // ── 2. Run all SCIP indexers, collect paths ───────────────────────────────
+  // We collect ALL scip paths first, then decide once whether to wipe+reload.
+  // This prevents wipAndReinit() being called between languages, which would
+  // erase symbols from a previously loaded language (e.g. Python wiped by TS).
+
+  const scipPaths: string[] = [];
 
   if (langs.python) {
     try {
       setStatus({ state: "scip-running", phase: "Running scip-python… (first run installs it via pip)" });
-      const scipPath = await runPythonIndexer(repoPath);
-
-      if (await needsReload(repoPath, scipPath)) {
-        setStatus({ state: "loading", phase: "Loading Python symbols into graph…" });
-        log("→ Loading Python index...");
-        await wipAndReinit(repoPath);
-        const result = await loadScipIndex(getDb(), scipPath, repoPath);
-        totalSymbols += result.symbolCount;
-        totalEdges   += result.edgeCount;
-        setStatus({ symbolCount: totalSymbols, edgeCount: totalEdges });
-        log(`→ Python ready: ${result.symbolCount.toLocaleString()} symbols`);
-      } else {
-        log("→ Python index up to date — skipping reload.");
-      }
+      const p = await runPythonIndexer(repoPath);
+      scipPaths.push(p);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`→ Python indexing failed: ${msg}`);
@@ -109,36 +103,66 @@ export async function runIndexer(): Promise<void> {
         state: "scip-running",
         phase: "Running scip-typescript… (first run may take 5–10 min for large repos)",
       });
-      const scipPath = await runTypescriptIndexer(repoPath);
-
-      if (await needsReload(repoPath, scipPath)) {
-        setStatus({ state: "loading", phase: "Loading TypeScript/JavaScript symbols into graph…" });
-        log("→ Loading TypeScript/JavaScript index...");
-        await wipAndReinit(repoPath);
-        const result = await loadScipIndex(getDb(), scipPath, repoPath);
-        totalSymbols += result.symbolCount;
-        totalEdges   += result.edgeCount;
-        setStatus({ symbolCount: totalSymbols, edgeCount: totalEdges });
-        log(`→ TypeScript/JavaScript ready: ${result.symbolCount.toLocaleString()} symbols`);
-      } else {
-        log("→ TypeScript/JavaScript index up to date — skipping reload.");
-        try {
-          const db = getDb();
-          const rs = db.prepare("SELECT COUNT(*) AS n FROM symbols").get() as { n: number } | undefined;
-          totalSymbols += rs?.n ?? 0;
-          const re = db.prepare("SELECT COUNT(*) AS n FROM edges").get() as { n: number } | undefined;
-          totalEdges += re?.n ?? 0;
-        } catch { /* non-fatal */ }
-      }
+      const p = await runTypescriptIndexer(repoPath);
+      scipPaths.push(p);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setStatus({ state: "error", phase: `TypeScript/JavaScript indexing failed: ${msg}`, errorMessage: msg });
       log(`→ TypeScript/JavaScript indexing failed: ${msg}`);
       log("   (Ariadne will continue without TypeScript/JavaScript symbols)");
     }
   }
 
-  // ── 3. Summary ───────────────────────────────────────────────────────────
+  if (scipPaths.length === 0) {
+    setStatus({ state: "ready", phase: "All indexers failed — graph is empty.", symbolCount: 0, edgeCount: 0 });
+    log("→ Ariadne ready (no symbols).");
+    return;
+  }
+
+  // ── 3. Decide once whether to wipe + reload ───────────────────────────────
+  // If ANY scip file is newer than the DB, wipe once and reload everything.
+  // This keeps all languages in a single consistent DB snapshot.
+
+  const anyStale = (
+    await Promise.all(scipPaths.map((p) => scipIsStale(repoPath, p)))
+  ).some(Boolean);
+
+  let totalSymbols = 0;
+  let totalEdges   = 0;
+
+  if (anyStale) {
+    setStatus({ state: "loading", phase: "Loading symbols into graph…" });
+    log("→ Loading index...");
+
+    // Wipe ONCE before loading all languages
+    await wipAndReinit(repoPath);
+
+    for (const scipPath of scipPaths) {
+      const label = scipPath.includes("python") ? "Python" : "TypeScript/JavaScript";
+      log(`→ Loading ${label} symbols…`);
+      try {
+        const result = await loadScipIndex(getDb(), scipPath, repoPath);
+        totalSymbols += result.symbolCount;
+        totalEdges   += result.edgeCount;
+        log(`→ ${label} ready: ${result.symbolCount.toLocaleString()} symbols`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`→ Failed to load ${label} symbols: ${msg}`);
+      }
+    }
+
+    setStatus({ symbolCount: totalSymbols, edgeCount: totalEdges });
+  } else {
+    log("→ Index up to date — skipping reload.");
+    try {
+      const db = getDb();
+      const rs = db.prepare("SELECT COUNT(*) AS n FROM symbols").get() as { n: number } | undefined;
+      totalSymbols = rs?.n ?? 0;
+      const re = db.prepare("SELECT COUNT(*) AS n FROM edges").get() as { n: number } | undefined;
+      totalEdges = re?.n ?? 0;
+    } catch { /* non-fatal */ }
+  }
+
+  // ── 4. Summary ────────────────────────────────────────────────────────────
   log(`→ Graph ready: ${totalSymbols.toLocaleString()} symbols, ${totalEdges.toLocaleString()} edges`);
 
   setStatus({
@@ -148,7 +172,7 @@ export async function runIndexer(): Promise<void> {
     edgeCount:   totalEdges,
   });
 
-  // ── 4. Start incremental watcher ─────────────────────────────────────────
+  // ── 5. Start incremental watcher ──────────────────────────────────────────
   startWatcher(getDb(), repoPath);
 
   log("→ Ariadne ready.");
