@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ariadne": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/madan.gopal/ariadne/dist/index.js"
+      ],
+      "env": {}
+    }
+  }
+}

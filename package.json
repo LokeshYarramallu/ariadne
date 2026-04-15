@@ -1,0 +1,36 @@
+{
+  "name": "ariadne",
+  "version": "0.1.0",
+  "description": "MCP server that gives coding agents a structural map of a codebase",
+  "main": "dist/index.js",
+  "bin": {
+    "ariadne": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.1",
+    "better-sqlite3": "^11.9.1",
+    "@types/google-protobuf": "^3.15.12",
+    "chokidar": "^3.6.0",
+    "google-protobuf": "^3.21.4",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-javascript": "^0.21.4",
+    "tree-sitter-python": "^0.21.0",
+    "tree-sitter-typescript": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}
