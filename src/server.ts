@@ -94,8 +94,8 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_file_symbols",
-    "Return the full symbol map for a file — every function, class, and method defined in it.",
-    { file: z.string().describe("Repo-relative or absolute path to the file") },
+    "Return every symbol defined in a file or directory. Pass a file path (e.g. src/auth/guard.ts) for a single file, or a directory path (e.g. src/modules/copilot) to get all symbols across every file in that directory.",
+    { file: z.string().describe("Repo-relative path to a file or directory") },
     async ({ file }) => ({
       content: [{ type: "text" as const, text: await handleGetFileSymbols(getDb(), { file }) }],
     }),

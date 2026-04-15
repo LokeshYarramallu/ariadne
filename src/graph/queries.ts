@@ -144,6 +144,20 @@ export async function getFileSymbols(
 }
 
 /**
+ * Return all symbols defined in files under a given directory, ordered by file + line.
+ */
+export async function getDirectorySymbols(
+  db: Database.Database,
+  dirPath: string,
+): Promise<Symbol[]> {
+  const prefix = dirPath.replace(/\/$/, "") + "/";
+  const rows = db.prepare(
+    `SELECT * FROM symbols WHERE file LIKE $prefix ORDER BY file, line`
+  ).all({ prefix: prefix + "%" }) as Record<string, unknown>[];
+  return rows.map(rowToSymbol);
+}
+
+/**
  * Best-effort: find the type/interface a symbol references.
  */
 export async function getTypeDefinition(
