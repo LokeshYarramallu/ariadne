@@ -30,28 +30,31 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_definition",
-    "Find where a symbol (function, class, method, variable) is defined in the codebase. " +
-    "Use this as the first step when you need to read an implementation — it gives you the exact file and line so you don't have to search. " +
-    "Do not use for fuzzy name searches; use find_symbol instead if you're unsure of the exact name. " +
-    "Returns: file path, line number, and signature. If empty, call get_index_status to check if indexing is complete.",
+    "Purpose: Find the exact definition of a symbol. " +
+    "Use when: The exact symbol name is known and you need its defining location. " +
+    "Avoid when: The symbol name is partial, fuzzy, or uncertain. " +
+    "Prefer instead: find_symbol for approximate or substring lookup. " +
+    "Input: Exact symbol name; optional file path to disambiguate duplicates. " +
+    "Returns: File path, line number, and signature. " +
+    "If empty: Check get_index_status; indexing may be incomplete.",
     {
-      symbol: z.string().describe("Exact symbol name (e.g. 'processPayment', 'UserService', 'handleLogin')"),
+      symbol: z.string().describe("Exact symbol name (e.g. 'processPayment', 'UserService')"),
       file: z.string().optional().describe("Optional: restrict to this file path when the same name exists in multiple files"),
     },
     async ({ symbol, file }) => ({
-      content: [
-        { type: "text" as const, text: await handleGetDefinition(getDb(), { symbol, file }) },
-      ],
+      content: [{ type: "text" as const, text: await handleGetDefinition(getDb(), { symbol, file }) }],
     }),
   );
 
   server.tool(
     "get_callers",
-    "Find every place in the codebase that calls or uses a given symbol. " +
-    "Use this to understand the blast radius of a change, trace how a function is invoked, or find all usages of a class. " +
-    "For classes with no direct call sites, automatically falls back to import and registration sites (e.g. NestJS module registrations). " +
-    "Do not use to find where a symbol is defined — use get_definition for that. " +
-    "Returns: list of caller symbols with file path and line number.",
+    "Purpose: Find all callers or usage sites of a symbol. " +
+    "Use when: You need upstream usage, invocation sites, or impact analysis. " +
+    "Avoid when: You want the symbol definition or internal dependencies of the symbol. " +
+    "Prefer instead: get_definition for the definition, get_callees for downstream calls. " +
+    "Input: Exact symbol name. " +
+    "Returns: Caller symbols or usage sites with file path and line number. " +
+    "If empty: For classes, usage may appear as import or registration sites rather than direct call sites.",
     { symbol: z.string().describe("Exact symbol name to find callers for") },
     async ({ symbol }) => ({
       content: [{ type: "text" as const, text: await handleGetCallers(getDb(), { symbol }) }],
@@ -60,10 +63,13 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_callees",
-    "Find every symbol that a given function or method calls internally. " +
-    "Use this to understand what a function depends on, trace data flow downward, or map out a call tree. " +
-    "Do not use to find who calls this function — use get_callers for that. " +
-    "Returns: list of called symbols with file path and line number.",
+    "Purpose: Find all symbols called by a function or method. " +
+    "Use when: You need downstream dependencies, internal call flow, or the call tree below a symbol. " +
+    "Avoid when: You want to know who calls the symbol. " +
+    "Prefer instead: get_callers for upstream usage. " +
+    "Input: Exact function or method symbol name. " +
+    "Returns: Called symbols with file path and line number. " +
+    "Caveat: Best suited to functions and methods, not general reference discovery.",
     { symbol: z.string().describe("Exact symbol name to inspect") },
     async ({ symbol }) => ({
       content: [{ type: "text" as const, text: await handleGetCallees(getDb(), { symbol }) }],
@@ -72,30 +78,31 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_implementations",
-    "Find all classes or functions that implement a given interface or extend an abstract base class. " +
-    "Use this to discover concrete implementations when you only know the interface name, or to audit all classes satisfying a contract. " +
-    "Do not use for finding call sites — use get_callers for that. " +
-    "Returns: list of implementing symbols with file path and line number.",
+    "Purpose: Find concrete implementations of an interface or abstract base class. " +
+    "Use when: You know the contract but need the implementing classes or functions. " +
+    "Avoid when: You want usages, callers, or general references. " +
+    "Prefer instead: get_callers for usage sites, get_references for broader references. " +
+    "Input: Interface or abstract class name. " +
+    "Returns: Implementing symbols with file path and line number. " +
+    "Caveat: Most useful when the codebase models behavior through interfaces or abstract types.",
     { interface: z.string().describe("Interface or abstract class name (e.g. 'LanguageParser', 'Repository')") },
     async (args) => ({
-      content: [
-        {
-          type: "text" as const,
-          text: await handleGetImplementations(getDb(), { interface: args.interface }),
-        },
-      ],
+      content: [{ type: "text" as const, text: await handleGetImplementations(getDb(), { interface: args.interface }) }],
     }),
   );
 
   server.tool(
     "get_call_path",
-    "Find the shortest call chain between two symbols — answers 'how does A eventually reach B?'. " +
-    "Use this to trace execution flow across multiple layers (e.g. controller → service → repository). " +
-    "Do not use when you just need direct callers or callees — use get_callers or get_callees for that. " +
-    "Returns: ordered list of symbols forming the chain, with file and line for each hop. Returns empty if no path exists within 12 hops.",
+    "Purpose: Find the shortest call chain between two symbols. " +
+    "Use when: You need to trace how one symbol eventually reaches another across layers. " +
+    "Avoid when: You only need direct callers or direct callees. " +
+    "Prefer instead: get_callers or get_callees for one-hop relationships. " +
+    "Input: Start symbol and target symbol. " +
+    "Returns: Ordered call chain with file path and line number for each hop. " +
+    "If empty: No path may exist within the search depth limit.",
     {
-      from: z.string().describe("Starting symbol name (e.g. 'checkout')"),
-      to: z.string().describe("Target symbol name (e.g. 'repository.save')"),
+      from: z.string().describe("Starting symbol name"),
+      to: z.string().describe("Target symbol name"),
     },
     async ({ from, to }) => ({
       content: [{ type: "text" as const, text: await handleGetCallPath(getDb(), { from, to }) }],
@@ -104,10 +111,13 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_references",
-    "Find every edge in the graph that points to a given symbol — includes calls, imports, decorator usages, and type references. " +
-    "Use this for a complete picture of all usages, including decorators like @Roles or @Controller that get_callers might miss. " +
-    "Do not use when you only want call sites — use get_callers for a cleaner call-only view. " +
-    "Returns: list of referencing symbols with file path and line number.",
+    "Purpose: Find all graph references to a symbol. " +
+    "Use when: You need a broad usage view including calls, imports, decorators, and type references. " +
+    "Avoid when: You only want direct call sites and a narrower result. " +
+    "Prefer instead: get_callers for call-only usage. " +
+    "Input: Exact symbol name. " +
+    "Returns: Referencing symbols or sites with file path and line number. " +
+    "Caveat: Broader than callers; results may include non-execution references.",
     { symbol: z.string().describe("Exact symbol name to find all references for") },
     async ({ symbol }) => ({
       content: [{ type: "text" as const, text: await handleGetReferences(getDb(), { symbol }) }],
@@ -116,11 +126,13 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_file_symbols",
-    "List every symbol (function, class, method, variable) defined in a file or directory. " +
-    "Use this to get a structural overview of a file before reading it, or to map all symbols in a module directory. " +
-    "Use the optional query param to filter by name — e.g. query='password' returns only password-related symbols, avoiding truncation on large directories. " +
-    "Do not use to search across the whole codebase — use find_symbol for that. " +
-    "Returns: list of symbols with kind, file, line, and signature. Results are capped at 200; use query to narrow down.",
+    "Purpose: List symbols defined in a file or directory. " +
+    "Use when: You need a structural overview before reading code or want symbols within a known path. " +
+    "Avoid when: You want codebase-wide symbol search. " +
+    "Prefer instead: find_symbol for global symbol discovery. " +
+    "Input: Repo-relative file or directory path; optional query filter. " +
+    "Returns: Symbols with kind, file path, line number, and signature. " +
+    "Caveat: Large directories may be capped; use the query filter to narrow results.",
     {
       file:  z.string().describe("Repo-relative path to a file (e.g. src/server.ts) or directory (e.g. src/modules/auth)"),
       query: z.string().optional().describe("Optional: filter symbols whose name contains this string (case-insensitive)"),
@@ -132,43 +144,45 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_type_definition",
-    "Best-effort: find the type, interface, or class that a symbol's type refers to. " +
-    "Use this when you need to understand the shape of a value — e.g. what type does this variable hold. " +
-    "Results may be incomplete for complex generic or inferred types. " +
-    "Returns: list of candidate type definitions with file and line. May return multiple candidates.",
+    "Purpose: Find the type definition associated with a symbol's type. " +
+    "Use when: You need to understand the shape or declared type behind a symbol. " +
+    "Avoid when: You want the symbol's own definition rather than its type target. " +
+    "Prefer instead: get_definition for the symbol definition itself. " +
+    "Input: Symbol name. " +
+    "Returns: Candidate type, interface, or class definitions with file path and line number. " +
+    "Caveat: May be incomplete for inferred, generic, or complex types and may return multiple candidates.",
     { symbol: z.string().describe("Symbol name to look up the type for") },
     async ({ symbol }) => ({
-      content: [
-        { type: "text" as const, text: await handleGetTypeDefinition(getDb(), { symbol }) },
-      ],
+      content: [{ type: "text" as const, text: await handleGetTypeDefinition(getDb(), { symbol }) }],
     }),
   );
 
   server.tool(
     "get_source_definition",
-    "Like get_definition but skips barrel/re-export files (index.ts, index.js) and returns the original source location. " +
-    "Use this instead of get_definition when the symbol is re-exported through an index file and you want the actual implementation file. " +
-    "Returns: file path, line number, and signature of the original source. Falls back to get_definition result if no non-barrel definition exists.",
+    "Purpose: Find the original source definition of a symbol, skipping barrels and re-exports when possible. " +
+    "Use when: get_definition lands on an index or barrel file but you need the implementation source. " +
+    "Avoid when: A normal definition lookup is sufficient. " +
+    "Prefer instead: get_definition for standard exact-definition lookup. " +
+    "Input: Exact symbol name; optional file path to disambiguate duplicates. " +
+    "Returns: Original source file path, line number, and signature. " +
+    "Caveat: Falls back to the normal definition result when no deeper source is available.",
     {
       symbol: z.string().describe("Exact symbol name to look up"),
       file: z.string().optional().describe("Optional: restrict to this file path"),
     },
     async ({ symbol, file }) => ({
-      content: [
-        {
-          type: "text" as const,
-          text: await handleGetSourceDefinition(getDb(), { symbol, file }),
-        },
-      ],
+      content: [{ type: "text" as const, text: await handleGetSourceDefinition(getDb(), { symbol, file }) }],
     }),
   );
 
   server.tool(
     "get_index_status",
-    "Returns the current state of the Ariadne code index — whether it is still indexing, ready, or errored. " +
-    "IMPORTANT: call this whenever any other Ariadne tool returns empty results or says a symbol was not found. " +
-    "If state is not 'ready', the index is still being built — tell the user to wait before retrying. " +
-    "Returns: state (starting/detecting/scip-running/loading/ready/error), phase description, symbol count, edge count, and elapsed time.",
+    "Purpose: Report the current status of the code index. " +
+    "Use when: Other tools return empty results, missing symbols, or unexpected failures. " +
+    "Avoid when: You already have valid tool output and do not need readiness diagnostics. " +
+    "Input: No input. " +
+    "Returns: Index state, phase, symbol count, edge count, and elapsed time. " +
+    "Caveat: If state is not ready, other tool results may be incomplete or stale.",
     {},
     async () => ({
       content: [{ type: "text" as const, text: handleGetIndexStatus() }],
@@ -177,11 +191,14 @@ export function createServer(): McpServer {
 
   server.tool(
     "find_symbol",
-    "Search for symbols by name across the entire codebase using a substring match. " +
-    "Use this when you don't know the exact symbol name — e.g. find_symbol('password') returns all symbols whose name contains 'password', across all files. " +
-    "Prefer this over grep or glob for symbol discovery. Use get_definition once you have the exact name. " +
-    "Returns: up to 50 matching symbols ordered by relevance (exact match first, then prefix, then substring), with file and line.",
-    { query: z.string().describe("Substring to search for in symbol names (case-insensitive, e.g. 'password', 'Auth', 'reset')") },
+    "Purpose: Find symbols by partial name or substring across the codebase. " +
+    "Use when: The exact symbol name is unknown or only part of the name is known. " +
+    "Avoid when: You already know the exact symbol and want its definition. " +
+    "Prefer instead: get_definition once the correct exact symbol is identified. " +
+    "Input: Case-insensitive substring query. " +
+    "Returns: Ranked symbol matches with file path and line number. " +
+    "Caveat: Best first step for discovery before exact lookup.",
+    { query: z.string().describe("Case-insensitive substring to search for in symbol names (e.g. 'password', 'Auth', 'reset')") },
     async ({ query }) => ({
       content: [{ type: "text" as const, text: await handleFindSymbol(getDb(), { query }) }],
     }),
@@ -189,10 +206,13 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_importers",
-    "Find all files that import a given file — the reverse of an import statement. " +
-    "Use this to trace usage upward through the module tree, find all consumers of a service or utility, or assess the impact of changing a file's exports. " +
-    "Do not use to find callers of a specific function — use get_callers for that. " +
-    "Returns: list of importing symbols (one per file) with file path and line of the import statement.",
+    "Purpose: Find files that import a given file. " +
+    "Use when: You need module-level consumers or want to assess the impact of changing a file's exports. " +
+    "Avoid when: You want callers of a specific function or method. " +
+    "Prefer instead: get_callers for symbol-level usage. " +
+    "Input: Repo-relative file path. " +
+    "Returns: Importing files or symbols with file path and line number of the import. " +
+    "Caveat: Works at file/module level, not symbol-call level.",
     { file: z.string().describe("Repo-relative path to the file being imported (e.g. src/services/auth.ts)") },
     async ({ file }) => ({
       content: [{ type: "text" as const, text: await handleGetImporters(getDb(), { file }) }],
@@ -201,11 +221,13 @@ export function createServer(): McpServer {
 
   server.tool(
     "search_files",
-    "Find all indexed files whose path matches a glob-style pattern. " +
-    "Use this to discover files by name pattern when you don't know the exact path — e.g. search_files('**/*password*') finds all files with 'password' in the filename. " +
-    "Replaces glob/find commands. Supports * (matches any chars except /) and ** (matches any path including /). " +
-    "Do not use to search file contents or symbol names — use find_symbol for symbols, get_references for usages. " +
-    "Returns: list of matching file paths.",
+    "Purpose: Find indexed files whose paths match a glob pattern. " +
+    "Use when: You know a naming pattern or directory shape but not the exact file path. " +
+    "Avoid when: You want symbol search, code references, or file content search. " +
+    "Prefer instead: find_symbol for symbol names, get_references for usages. " +
+    "Input: Glob pattern using * and **. " +
+    "Returns: Matching file paths. " +
+    "Caveat: Matches file paths only, not contents or symbol definitions.",
     { pattern: z.string().describe("Glob pattern (e.g. '**/*password*', 'src/modules/**', '**/*.service.ts')") },
     async ({ pattern }) => ({
       content: [{ type: "text" as const, text: await handleSearchFiles(getDb(), { pattern }) }],
