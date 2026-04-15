@@ -9,6 +9,9 @@ export { GET_FILE_SYMBOLS_TOOL, handleGetFileSymbols } from "./get-file-symbols.
 export { GET_TYPE_DEFINITION_TOOL, handleGetTypeDefinition } from "./get-type-definition.js";
 export { GET_SOURCE_DEFINITION_TOOL, handleGetSourceDefinition } from "./get-source-definition.js";
 export { GET_INDEX_STATUS_TOOL, handleGetIndexStatus } from "./get-index-status.js";
+export { FIND_SYMBOL_TOOL, handleFindSymbol } from "./find-symbol.js";
+export { GET_IMPORTERS_TOOL, handleGetImporters } from "./get-importers.js";
+export { SEARCH_FILES_TOOL, handleSearchFiles } from "./search-files.js";
 
 import { GET_DEFINITION_TOOL } from "./get-definition.js";
 import { GET_CALLERS_TOOL } from "./get-callers.js";
@@ -20,6 +23,9 @@ import { GET_FILE_SYMBOLS_TOOL } from "./get-file-symbols.js";
 import { GET_TYPE_DEFINITION_TOOL } from "./get-type-definition.js";
 import { GET_SOURCE_DEFINITION_TOOL } from "./get-source-definition.js";
 import { GET_INDEX_STATUS_TOOL } from "./get-index-status.js";
+import { FIND_SYMBOL_TOOL } from "./find-symbol.js";
+import { GET_IMPORTERS_TOOL } from "./get-importers.js";
+import { SEARCH_FILES_TOOL } from "./search-files.js";
 
 export const ALL_TOOLS = [
   GET_DEFINITION_TOOL,
@@ -32,4 +38,7 @@ export const ALL_TOOLS = [
   GET_TYPE_DEFINITION_TOOL,
   GET_SOURCE_DEFINITION_TOOL,
   GET_INDEX_STATUS_TOOL,
+  FIND_SYMBOL_TOOL,
+  GET_IMPORTERS_TOOL,
+  SEARCH_FILES_TOOL,
 ];

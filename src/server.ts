@@ -13,6 +13,9 @@ import {
   handleGetTypeDefinition,
   handleGetSourceDefinition,
   handleGetIndexStatus,
+  handleFindSymbol,
+  handleGetImporters,
+  handleSearchFiles,
 } from "./tools/index.js";
 
 // getDb() is called lazily inside each tool handler — NOT at server creation time.
@@ -41,7 +44,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_callers",
-    "List all call sites that invoke the given symbol.",
+    "List all call sites that invoke the given symbol. For classes, also returns import and registration sites (e.g. NestJS module registrations).",
     { symbol: z.string().describe("Symbol name to find callers for") },
     async ({ symbol }) => ({
       content: [{ type: "text" as const, text: await handleGetCallers(getDb(), { symbol }) }],
@@ -94,10 +97,13 @@ export function createServer(): McpServer {
 
   server.tool(
     "get_file_symbols",
-    "Return the full symbol map for a file — every function, class, and method defined in it.",
-    { file: z.string().describe("Repo-relative or absolute path to the file") },
-    async ({ file }) => ({
-      content: [{ type: "text" as const, text: await handleGetFileSymbols(getDb(), { file }) }],
+    "Return every symbol defined in a file or directory. Pass a file path (e.g. src/auth/guard.ts) for a single file, or a directory path (e.g. src/modules/copilot) to get all symbols across every file in that directory. Use the optional 'query' param to filter by name (e.g. query='password' returns only symbols whose name contains 'password').",
+    {
+      file:  z.string().describe("Repo-relative path to a file or directory"),
+      query: z.string().optional().describe("Optional: filter symbols by name (case-insensitive substring match)"),
+    },
+    async ({ file, query }) => ({
+      content: [{ type: "text" as const, text: await handleGetFileSymbols(getDb(), { file, query }) }],
     }),
   );
 
@@ -137,6 +143,33 @@ export function createServer(): McpServer {
     {},
     async () => ({
       content: [{ type: "text" as const, text: handleGetIndexStatus() }],
+    }),
+  );
+
+  server.tool(
+    "find_symbol",
+    "Fuzzy search for symbols by name across the entire codebase. Use when you don't know the exact symbol name — e.g. find_symbol('password') returns all symbols whose name contains 'password'. Replaces glob patterns like **/*password*.",
+    { query: z.string().describe("Substring to search for in symbol names (case-insensitive)") },
+    async ({ query }) => ({
+      content: [{ type: "text" as const, text: await handleFindSymbol(getDb(), { query }) }],
+    }),
+  );
+
+  server.tool(
+    "get_importers",
+    "Find all files that import a given file. Use this to trace usage upward through the module tree — e.g. get_importers('src/services/auth-service.ts') shows every file that imports it.",
+    { file: z.string().describe("Repo-relative path to the file") },
+    async ({ file }) => ({
+      content: [{ type: "text" as const, text: await handleGetImporters(getDb(), { file }) }],
+    }),
+  );
+
+  server.tool(
+    "search_files",
+    "Find all indexed files whose path matches a pattern. Supports * (any chars) and ** (any path segment). E.g. search_files('**/*password*') finds all files with 'password' in the name. Replaces glob.",
+    { pattern: z.string().describe("Glob-style pattern (e.g. **/*password*, src/modules/**)") },
+    async ({ pattern }) => ({
+      content: [{ type: "text" as const, text: await handleSearchFiles(getDb(), { pattern }) }],
     }),
   );
 

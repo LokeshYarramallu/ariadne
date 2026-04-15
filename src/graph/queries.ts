@@ -43,12 +43,15 @@ export async function getDefinition(
 
 /**
  * Find all call sites that invoke symbols matching `symbolName`.
+ * Falls back to all reference edges (imports, references) when no call edges
+ * exist — this surfaces class registrations and import sites for non-callable
+ * symbols like classes.
  */
 export async function getCallers(
   db: Database.Database,
   symbolName: string,
 ): Promise<CallSite[]> {
-  const rows = db.prepare(`
+  const callRows = db.prepare(`
     SELECT
       s.id, s.name, s.kind, s.file, s.line, s.signature, s.docstring,
       e.line AS call_line
@@ -59,7 +62,26 @@ export async function getCallers(
     ORDER BY s.file, e.line
   `).all({ name: symbolName }) as Record<string, unknown>[];
 
-  return rows.map((row) => ({
+  if (callRows.length > 0) {
+    return callRows.map((row) => ({
+      caller: rowToSymbol(row),
+      line:   (row["call_line"] as number | null) ?? (row["line"] as number),
+    }));
+  }
+
+  // No call edges — fall back to imports + references (e.g. class registrations)
+  const refRows = db.prepare(`
+    SELECT
+      s.id, s.name, s.kind, s.file, s.line, s.signature, s.docstring,
+      e.line AS call_line
+    FROM edges e
+    JOIN symbols s ON s.id = e.from_symbol
+    WHERE e.to_symbol IN (SELECT id FROM symbols WHERE name = $name)
+      AND e.kind IN ('imports', 'references')
+    ORDER BY s.file, e.line
+  `).all({ name: symbolName }) as Record<string, unknown>[];
+
+  return refRows.map((row) => ({
     caller: rowToSymbol(row),
     line:   (row["call_line"] as number | null) ?? (row["line"] as number),
   }));
@@ -89,6 +111,8 @@ export async function getCallees(
 
 /**
  * Find all edges pointing at symbols matching `symbolName`, any edge kind.
+ * Includes calls, imports, references, and implements edges — so decorators,
+ * class registrations, and function calls are all surfaced.
  */
 export async function getReferences(
   db: Database.Database,
@@ -97,7 +121,8 @@ export async function getReferences(
   const rows = db.prepare(`
     SELECT
       s.id, s.name, s.kind, s.file, s.line, s.signature, s.docstring,
-      e.line AS ref_line
+      e.line AS ref_line,
+      e.kind AS edge_kind
     FROM edges e
     JOIN symbols s ON s.id = e.from_symbol
     WHERE e.to_symbol IN (SELECT id FROM symbols WHERE name = $name)
@@ -141,6 +166,91 @@ export async function getFileSymbols(
   ).all({ file: filePath }) as Record<string, unknown>[];
 
   return rows.map(rowToSymbol);
+}
+
+/**
+ * Return all symbols defined in files under a given directory, ordered by file + line.
+ */
+export async function getDirectorySymbols(
+  db: Database.Database,
+  dirPath: string,
+): Promise<Symbol[]> {
+  const prefix = dirPath.replace(/\/$/, "") + "/";
+  const rows = db.prepare(
+    `SELECT * FROM symbols WHERE file LIKE $prefix ORDER BY file, line`
+  ).all({ prefix: prefix + "%" }) as Record<string, unknown>[];
+  return rows.map(rowToSymbol);
+}
+
+/**
+ * Fuzzy symbol search — returns all symbols whose name contains the query string.
+ */
+export async function findSymbol(
+  db: Database.Database,
+  query: string,
+  limit = 50,
+): Promise<Symbol[]> {
+  const rows = db.prepare(`
+    SELECT * FROM symbols
+    WHERE name LIKE $pattern
+    ORDER BY
+      CASE WHEN name = $exact THEN 0
+           WHEN name LIKE $prefix THEN 1
+           ELSE 2 END,
+      name
+    LIMIT $limit
+  `).all({
+    pattern: `%${query}%`,
+    exact:   query,
+    prefix:  `${query}%`,
+    limit,
+  }) as Record<string, unknown>[];
+  return rows.map(rowToSymbol);
+}
+
+/**
+ * Return all symbols (in other files) that import the given file.
+ */
+export async function getImporters(
+  db: Database.Database,
+  filePath: string,
+): Promise<{ symbol: Symbol; line: number }[]> {
+  const rows = db.prepare(`
+    SELECT
+      s.id, s.name, s.kind, s.file, s.line, s.signature, s.docstring,
+      e.line AS import_line
+    FROM edges e
+    JOIN symbols s ON s.id = e.from_symbol
+    WHERE e.kind = 'imports'
+      AND e.to_symbol IN (SELECT id FROM symbols WHERE file = $file OR file = $absFile)
+    GROUP BY s.file
+    ORDER BY s.file
+  `).all({ file: filePath, absFile: filePath }) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    symbol: rowToSymbol(row),
+    line:   (row["import_line"] as number | null) ?? (row["line"] as number),
+  }));
+}
+
+/**
+ * Find all indexed files whose path matches a glob-style pattern.
+ * Supports * (any chars except /) and ** (any chars including /).
+ */
+export async function searchFiles(
+  db: Database.Database,
+  pattern: string,
+): Promise<string[]> {
+  // Convert glob pattern to SQL LIKE pattern
+  const sqlPattern = pattern
+    .replace(/%/g, "\\%")   // escape existing % 
+    .replace(/\*\*/g, "%")  // ** → %
+    .replace(/\*/g, "%");   // * → %
+
+  const rows = db.prepare(
+    `SELECT DISTINCT file FROM symbols WHERE file LIKE $pattern ESCAPE '\\' ORDER BY file`
+  ).all({ pattern: sqlPattern }) as { file: string }[];
+
+  return rows.map((r) => r.file);
 }
 
 /**
