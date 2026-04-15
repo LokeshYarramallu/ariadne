@@ -24,7 +24,7 @@ Add this to your editor/agent MCP config once — never touch it again:
   "mcpServers": {
     "ariadne": {
       "command": "npx",
-      "args": ["-y", "ariadne"]
+      "args": ["-y", "ariadne-mcp"]
     }
   }
 }
@@ -36,7 +36,7 @@ directory, which is always the open project root.
 
 ## Startup flow
 ```
-npx ariadne
+npx ariadne-mcp
   → const repoPath = process.cwd()          // no --repo flag, ever
   → init(repoPath)                           // open .ariadne/graph.db
   → detectLanguages(repoPath)                // scan for .py / .ts / .js

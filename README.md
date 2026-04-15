@@ -36,7 +36,7 @@ Add this to your MCP config (Claude Desktop, Cursor, or any MCP-compatible edito
   "mcpServers": {
     "ariadne": {
       "command": "npx",
-      "args": ["-y", "ariadne"]
+      "args": ["-y", "ariadne-mcp"]
     }
   }
 }
@@ -84,7 +84,7 @@ That's it. Ariadne is spawned as a subprocess and inherits the editor's working 
 ## How it works
 
 ```
-npx ariadne
+npx ariadne-mcp
   → process.cwd()                    repo root (inherited from editor)
   → scip-typescript / scip-python    full semantic index → .ariadne/index.scip
   → loadScipIndex()                  symbols + edges → .ariadne/graph.db (SQLite)
