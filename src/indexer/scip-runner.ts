@@ -12,6 +12,35 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+let npmCliPathCache: string | null = null;
+
+async function resolveNpmCliPath(): Promise<string> {
+  if (npmCliPathCache) return npmCliPathCache;
+
+  const envPath = process.env["npm_execpath"];
+  if (envPath) {
+    npmCliPathCache = envPath;
+    return npmCliPathCache;
+  }
+
+  const bundled = path.join(
+    path.dirname(process.execPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  try {
+    await fs.access(bundled);
+    npmCliPathCache = bundled;
+    return npmCliPathCache;
+  } catch {
+    throw new Error(
+      "Could not locate npm CLI. Ensure Node.js/npm is installed and npm is available.",
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Low-level subprocess helpers
 // ---------------------------------------------------------------------------
@@ -37,7 +66,12 @@ function runSubprocess(
 
     proc.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`\`${command} ${args.join(" ")}\` exited with code ${code}`));
+      else
+        reject(
+          new Error(
+            `\`${command} ${args.join(" ")}\` exited with code ${code}`,
+          ),
+        );
     });
 
     proc.on("error", (err) => {
@@ -46,13 +80,57 @@ function runSubprocess(
   });
 }
 
+/**
+ * Execute a package binary via npm exec.
+ * We run npm-cli.js with node directly, avoiding Windows .cmd spawn issues.
+ */
+async function runPackageBinary(
+  packageName: string,
+  binaryName: string,
+  binaryArgs: string[],
+  cwd: string,
+): Promise<void> {
+  if (process.platform !== "win32") {
+    await runSubprocess(
+      "npm",
+      [
+        "exec",
+        "--yes",
+        "--package",
+        packageName,
+        "--",
+        binaryName,
+        ...binaryArgs,
+      ],
+      cwd,
+    );
+    return;
+  }
+
+  const npmCli = await resolveNpmCliPath();
+  await runSubprocess(
+    process.execPath,
+    [
+      npmCli,
+      "exec",
+      "--yes",
+      "--package",
+      packageName,
+      "--",
+      binaryName,
+      ...binaryArgs,
+    ],
+    cwd,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Python indexer (@sourcegraph/scip-python)
 // ---------------------------------------------------------------------------
 
 /**
  * Run the Python SCIP indexer against repoPath.
- * Uses npx so no global install is required — npx caches on first run.
+ * Uses npm exec so no global install is required.
  *
  * scip-python requires package metadata to construct symbol identifiers.
  * If no pyproject.toml / setup.py / setup.cfg exists we create a minimal
@@ -68,7 +146,10 @@ export async function runPythonIndexer(repoPath: string): Promise<string> {
   const hasMetadata = (
     await Promise.all(
       metadataFiles.map((f) =>
-        fs.access(path.join(repoPath, f)).then(() => true).catch(() => false),
+        fs
+          .access(path.join(repoPath, f))
+          .then(() => true)
+          .catch(() => false),
       ),
     )
   ).some(Boolean);
@@ -88,7 +169,9 @@ export async function runPythonIndexer(repoPath: string): Promise<string> {
     const stat = await fs.stat(outputPath);
     const ageMs = Date.now() - stat.mtimeMs;
     if (ageMs < 24 * 60 * 60 * 1000) {
-      process.stderr.write("→ Reusing existing Python SCIP index (< 24 h old).\n");
+      process.stderr.write(
+        "→ Reusing existing Python SCIP index (< 24 h old).\n",
+      );
       if (createdSynthetic) await fs.unlink(syntheticPyproject).catch(() => {});
       return outputPath;
     }
@@ -96,18 +179,32 @@ export async function runPythonIndexer(repoPath: string): Promise<string> {
     // File doesn't exist yet — proceed to index
   }
 
+  // Known upstream issue: @sourcegraph/scip-python currently crashes on Windows
+  // due path separator regex construction. Skip with a clear, actionable message.
+  if (process.platform === "win32") {
+    process.stderr.write(
+      "→ Skipping Python indexing: @sourcegraph/scip-python is currently incompatible with Windows.\n",
+    );
+    process.stderr.write(
+      "   Use WSL/Linux/macOS for Python indexing, or pre-generate .ariadne/index-python.scip in another environment.\n",
+    );
+    throw new Error("Python indexer unavailable on Windows");
+  }
+
   process.stderr.write("→ Indexing Python files...\n");
   try {
-    // npx --yes auto-installs the package if not cached
-    await runSubprocess(
-      "npx",
-      ["--yes", "@sourcegraph/scip-python", "index", ".", "--output", outputPath],
+    await runPackageBinary(
+      "@sourcegraph/scip-python",
+      "scip-python",
+      ["index", ".", "--output", outputPath],
       repoPath,
     );
     await fs.access(outputPath);
   } finally {
     if (createdSynthetic) {
-      await fs.unlink(syntheticPyproject).catch(() => {/* ignore if already gone */});
+      await fs.unlink(syntheticPyproject).catch(() => {
+        /* ignore if already gone */
+      });
     }
   }
 
@@ -125,7 +222,10 @@ type MonorepoStrategy =
   | { kind: "fallback" };
 
 async function fileExists(p: string): Promise<boolean> {
-  return fs.access(p).then(() => true).catch(() => false);
+  return fs
+    .access(p)
+    .then(() => true)
+    .catch(() => false);
 }
 
 /**
@@ -148,9 +248,13 @@ async function detectStrategy(repoPath: string): Promise<MonorepoStrategy> {
     return { kind: "yarn-workspaces" };
   }
   try {
-    const pkg = JSON.parse(await fs.readFile(path.join(repoPath, "package.json"), "utf8"));
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(repoPath, "package.json"), "utf8"),
+    );
     if (pkg.workspaces) return { kind: "yarn-workspaces" };
-  } catch { /* no package.json */ }
+  } catch {
+    /* no package.json */
+  }
 
   // Tier 3: root tsconfig.json (handles project references automatically)
   const rootTsconfig = path.join(repoPath, "tsconfig.json");
@@ -162,7 +266,11 @@ async function detectStrategy(repoPath: string): Promise<MonorepoStrategy> {
   const searchDirs = ["packages", "apps", "applications", "src"];
   for (const dir of searchDirs) {
     let entries: string[];
-    try { entries = await fs.readdir(path.join(repoPath, dir)); } catch { continue; }
+    try {
+      entries = await fs.readdir(path.join(repoPath, dir));
+    } catch {
+      continue;
+    }
     for (const entry of entries) {
       const candidate = path.join(repoPath, dir, entry, "tsconfig.json");
       if (await fileExists(candidate)) {
@@ -186,28 +294,37 @@ export async function runTypescriptIndexer(repoPath: string): Promise<string> {
   try {
     const ageMs = Date.now() - (await fs.stat(outputPath)).mtimeMs;
     if (ageMs < 24 * 60 * 60 * 1000) {
-      process.stderr.write("→ Reusing existing TypeScript SCIP index (< 24 h old).\n");
+      process.stderr.write(
+        "→ Reusing existing TypeScript SCIP index (< 24 h old).\n",
+      );
       return outputPath;
     }
-  } catch { /* no existing index */ }
+  } catch {
+    /* no existing index */
+  }
 
   const strategy = await detectStrategy(repoPath);
-  const baseArgs = ["--yes", "@sourcegraph/scip-typescript", "index",
-                    "--cwd", repoPath, "--output", outputPath];
+  const baseArgs = ["index", "--cwd", repoPath, "--output", outputPath];
 
   let args: string[];
   switch (strategy.kind) {
     case "pnpm-workspaces":
-      process.stderr.write("→ Indexing TypeScript/JavaScript files (pnpm workspaces)...\n");
+      process.stderr.write(
+        "→ Indexing TypeScript/JavaScript files (pnpm workspaces)...\n",
+      );
       args = [...baseArgs, "--pnpm-workspaces"];
       break;
     case "yarn-workspaces":
-      process.stderr.write("→ Indexing TypeScript/JavaScript files (yarn/npm workspaces)...\n");
+      process.stderr.write(
+        "→ Indexing TypeScript/JavaScript files (yarn/npm workspaces)...\n",
+      );
       args = [...baseArgs, "--yarn-workspaces"];
       break;
     case "tsconfig-root": {
       const rel = path.relative(repoPath, strategy.tsconfig);
-      process.stderr.write(`→ Indexing TypeScript/JavaScript files (tsconfig: ${rel})...\n`);
+      process.stderr.write(
+        `→ Indexing TypeScript/JavaScript files (tsconfig: ${rel})...\n`,
+      );
       args = [...baseArgs, strategy.tsconfig];
       break;
     }
@@ -216,7 +333,12 @@ export async function runTypescriptIndexer(repoPath: string): Promise<string> {
       args = baseArgs;
   }
 
-  await runSubprocess("npx", args, repoPath);
+  await runPackageBinary(
+    "@sourcegraph/scip-typescript",
+    "scip-typescript",
+    args,
+    repoPath,
+  );
   await fs.access(outputPath);
   return outputPath;
 }
